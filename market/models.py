@@ -82,6 +82,28 @@ class SubscriptionManager(ProductContainerManager):
             Q(first_lesson_date__lte=edge_date) | Q(first_lesson_date__isnull=True, buy_date__lte=edge_date)
         )
 
+    def active(self):
+        edge_date = timezone.now() - F('duration')
+        return self.get_queryset().filter(
+            is_fully_used=False,
+        ).filter(
+            Q(first_lesson_date__gt=edge_date) | Q(first_lesson_date__isnull=True, buy_date__gt=edge_date)
+        )
+
+    def forgotten(self):
+        """
+        Find forgotten subscriptions that were not notified
+        """
+        one_week_past = timezone.now() - timedelta(weeks=1)
+        return self.active().filter(
+            ~Q(classes__timeline__start__gte=one_week_past),
+            (
+                Q(forgotten_notify_date__isnull=True) |
+                Q(forgotten_notify_date__lte=one_week_past)
+            ),
+            buy_date__lt=one_week_past
+        )
+
 
 class Subscription(ProductContainer):
     """
@@ -103,6 +125,7 @@ class Subscription(ProductContainer):
     duration = models.DurationField(editable=False)  # every subscription cares a duration field, taken from its product
 
     first_lesson_date = models.DateTimeField('Date of the first lesson', editable=False, null=True)
+    forgotten_notify_date = models.DateTimeField('Date when notification sent about forgotten', null=True)
 
     def __str__(self):
         return self.name_for_user
@@ -218,6 +241,13 @@ class Subscription(ProductContainer):
                 return True
 
         return False
+
+    def update_forgotten_notify_date(self):
+        """
+        Set current date to forgotten_notify_date.
+        """
+        self.forgotten_notify_date = timezone.now()
+        self.save(update_fields=['forgotten_notify_date'])
 
 
 class ClassesManager(ProductContainerManager):
