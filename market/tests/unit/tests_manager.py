@@ -21,7 +21,7 @@ class TestClassManager(TestCase):
     def setUpTestData(cls):
         cls.customer = create_customer()
         cls.product = products.Product1.objects.get(pk=cls.TEST_PRODUCT_ID)
-        cls.product.duration = timedelta(days=5)
+        cls.product.duration = timedelta(days=15)
 
     def setUp(self):
         self.subscription = models.Subscription(
@@ -198,3 +198,63 @@ class TestClassManager(TestCase):
         self.subscription.save()
 
         self.assertEqual(models.Subscription.objects.due().count(), 0)
+
+    def test_active_queryset_base_on_buy_date(self):
+        self.assertEqual(models.Subscription.objects.active().count(), 1)
+
+        with freeze_time('2032-12-20'):
+            self.assertEqual(models.Subscription.objects.active().count(), 0)
+
+    def test_active_queryset_based_on_first_lesson_date(self):
+        self.assertEqual(models.Subscription.objects.active().count(), 1)
+
+        self.subscription.first_lesson_date = self.tzdatetime(2011, 12, 1, 12, 0)  # set first lesson date to far-far ago
+        self.subscription.save()
+
+        self.assertEqual(models.Subscription.objects.active().count(), 0)
+
+    def test_active_queryset_ignores_buy_date_of_lessons_that_have_first_lesson_date(self):
+        self.subscription.buy_date = self.tzdatetime(2011, 12, 1, 12, 0)  # far-far ago
+        self.subscription.first_lesson_date = self.tzdatetime(2032, 10, 29, 12, 0)  # almost yesterday
+
+        self.subscription.save()
+
+        self.assertEqual(models.Subscription.objects.active().count(), 1)
+
+    def test_forgotten_queryset_ignores_subscriptions_bought_one_week_ago(self):
+        with freeze_time('2032-11-04'):  # 3 days future move
+            self.assertEqual(models.Subscription.objects.forgotten().count(), 0)
+
+    def test_forgotten_queryset_based_on_buy_date(self):
+        with freeze_time('2032-11-09'):  # 8 days future move
+            self.assertEqual(models.Subscription.objects.forgotten().count(), 1)
+
+    def test_forgotten_queryset_based_on_scheduled_class(self):
+        self._schedule(date=self.tzdatetime(2032, 11, 10, 11, 30))
+        with freeze_time('2032-11-09'):  # 8 days future move, there is scheduled class
+            self.assertEqual(models.Subscription.objects.forgotten().count(), 0)
+
+    def test_forgotten_queryset_ignores_due_subscriptions(self):
+        with freeze_time('2032-12-09'):  # 12 days future move, the subscription should due
+            self.assertEqual(models.Subscription.objects.forgotten().count(), 0)
+
+    def test_forgotten_queryset_ignores_notified_subscriptions(self):
+        with freeze_time('2032-11-09'):
+            self.assertEqual(models.Subscription.objects.forgotten().count(), 1)
+
+            self.subscription.forgotten_notify_date = self.tzdatetime('UTC', 2032, 11, 8, 1, 0)
+            self.subscription.save()
+
+            self.assertEqual(models.Subscription.objects.forgotten().count(), 0)
+
+    def test_forgotten_queryset_based_notified_date(self):
+        """
+        The subscription with too old notify date should be also notified.
+        """
+        with freeze_time('2032-11-14'):
+            self.assertEqual(models.Subscription.objects.forgotten().count(), 1)
+
+            self.subscription.forgotten_reminder_date = self.tzdatetime('UTC', 2032, 11, 6, 1, 0)
+            self.subscription.save()
+
+            self.assertEqual(models.Subscription.objects.forgotten().count(), 1)
